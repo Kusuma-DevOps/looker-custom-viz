@@ -1,121 +1,145 @@
 looker.plugins.visualizations.add({
-  // 1. Create the UI and Breadcrumb container
   create: function(element, config) {
     element.innerHTML = `
       <style>
-        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap');
-        .viz-container { font-family: 'Open Sans', sans-serif; padding: 15px; color: #333; height: 100%; overflow-y: auto; }
-        .breadcrumb-nav { margin-bottom: 15px; font-size: 14px; display: flex; align-items: center; }
-        .breadcrumb-item { color: #4285F4; font-weight: bold; cursor: pointer; text-decoration: none; }
-        .breadcrumb-item:hover { text-decoration: underline; }
-        .breadcrumb-sep { margin: 0 8px; color: #999; }
-        .breadcrumb-last { color: #000; font-weight: bold; }
-        
+        .viz-container { height: 100%; display: flex; flex-direction: column; padding: 10px; font-family: sans-serif; }
+        .breadcrumbs { font-size: 14px; font-weight: bold; margin-bottom: 20px; color: #333; }
+        .breadcrumbs a { color: #4285F4; text-decoration: none; cursor: pointer; }
         .viz-table { width: 100%; border-collapse: collapse; }
-        .viz-table th { text-align: left; font-size: 11px; color: #707781; text-transform: uppercase; border-bottom: 1px solid #EAEAEA; padding-bottom: 8px; }
-        .viz-table td { padding: 10px 5px; border-bottom: 1px solid #F5F5F5; }
-        
-        .label-cell { cursor: pointer; color: #262D33; font-size: 13px; width: 30%; }
-        .label-cell:hover { color: #4285F4; text-decoration: underline; }
-        
-        .bar-wrap { display: flex; align-items: center; width: 70%; }
-        .bar-bg { background: #f0f0f0; flex-grow: 1; height: 20px; cursor: pointer; position: relative; }
-        .bar-fill { background: #E52592; height: 100%; transition: width 0.4s ease; }
-        .bar-text { margin-left: 10px; font-size: 12px; color: #333; width: 70px; }
+        .viz-table th { text-align: left; border-bottom: 1px solid #C1C6CC; padding: 8px; font-size: 12px; color: #707781; text-transform: uppercase; }
+        .viz-table td { padding: 10px 8px; border-bottom: 1px solid #EAEAEA; font-size: 13px; }
+        .bar-container { background: #f2f2f2; width: 100%; height: 20px; position: relative; cursor: pointer; }
+        .bar-fill { background: #E52592; height: 100%; transition: width 0.5s ease; }
+        .bar-label { position: absolute; right: -45px; top: 0; font-size: 11px; color: #333; }
+        .clickable-cell { color: #262D33; cursor: pointer; font-weight: 500; }
+        .clickable-cell:hover { text-decoration: underline; }
+
+        /* Custom Popup Menu Styling */
+        .drill-menu {
+          position: absolute; background: white; border: 1px solid #ccc; 
+          box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 1000; display: none;
+          border-radius: 4px; padding: 5px 0; min-width: 150px;
+        }
+        .drill-menu-item {
+          padding: 8px 15px; cursor: pointer; font-size: 13px; color: #333;
+        }
+        .drill-menu-item:hover { background: #f5f5f5; color: #4285F4; }
       </style>
       <div class="viz-container">
-        <div id="nav" class="breadcrumb-nav"></div>
+        <div id="breadcrumb-nav" class="breadcrumbs"></div>
+        <div id="custom-menu" class="drill-menu"></div>
         <table class="viz-table">
-          <thead><tr id="headers"></tr></thead>
-          <tbody id="body"></tbody>
+          <thead><tr id="table-headers"></tr></thead>
+          <tbody id="table-body"></tbody>
         </table>
       </div>
     `;
-    this.drillStack = []; // This tracks where we are (e.g., Furniture > Chairs)
+    this.currentLevel = 0; // 0 = Category, 1 = Subcategory, 2 = Segment
+    this.drillFilter = null;
   },
 
   updateAsync: function(data, element, config, queryResponse, details, done) {
-    this.allData = data;
+    this.data = data;
     this.fields = queryResponse.fields;
     this.renderViz();
     done();
   },
 
   renderViz: function() {
-    const body = document.getElementById('body');
-    const header = document.getElementById('headers');
-    const nav = document.getElementById('nav');
-    
-    body.innerHTML = "";
-    header.innerHTML = "";
-    nav.innerHTML = "";
+    const tableBody = document.getElementById('table-body');
+    const tableHeaders = document.getElementById('table-headers');
+    const nav = document.getElementById('breadcrumb-nav');
+    const menu = document.getElementById('custom-menu');
 
+    tableBody.innerHTML = "";
+    tableHeaders.innerHTML = "";
+    
     const dims = this.fields.dimension_like;
     const meas = this.fields.measure_like[0];
-    const currentLevel = this.drillStack.length; // 0 = Category, 1 = Subcat, etc.
 
-    // 1. Build Breadcrumbs
-    let navHTML = `<span class="breadcrumb-item" id="go-home">All</span>`;
-    this.drillStack.forEach((step, i) => {
-      navHTML += `<span class="breadcrumb-sep">></span><span class="breadcrumb-item drill-back" data-index="${i}">${step.value}</span>`;
-    });
-    navHTML += `<span class="breadcrumb-sep">></span><span class="breadcrumb-last">Current Viz</span>`;
+    // 1. Breadcrumbs Logic
+    let navHTML = `<a id="back-home">Step 1</a> > `;
+    if (this.currentLevel > 0) {
+      navHTML += `<a id="back-prev">${this.drillFilter}</a> > `;
+    }
+    navHTML += `<span style="color:#000">Current Viz</span>`;
     nav.innerHTML = navHTML;
 
-    // 2. Set Header for current level
-    header.innerHTML = `<th>${dims[currentLevel].label_short}</th><th>${meas.label_short}</th>`;
+    // 2. Header
+    tableHeaders.innerHTML = `<th>${dims[this.currentLevel].label_short}</th><th>${meas.label_short}</th>`;
 
-    // 3. Filter Data based on drill stack
-    let filteredData = this.allData;
-    this.drillStack.forEach((step, i) => {
-      filteredData = filteredData.filter(row => row[dims[i].name].value === step.value);
-    });
+    // 3. Filter and Group Data
+    let displayData = this.data;
+    if (this.drillFilter) {
+      displayData = this.data.filter(row => row[dims[0].name].value === this.drillFilter);
+    }
 
-    // 4. Group data by the current dimension level
+    // Grouping by current dimension
     const grouped = {};
-    filteredData.forEach(row => {
-      const key = row[dims[currentLevel].name].value;
+    displayData.forEach(row => {
+      const key = row[dims[this.currentLevel].name].value;
       const val = row[meas.name].value;
-      if (!grouped[key]) { grouped[key] = { value: 0, row: row }; }
-      grouped[key].value += val;
+      if (!grouped[key]) grouped[key] = 0;
+      grouped[key] += val;
     });
 
-    const maxVal = Math.max(...Object.values(grouped).map(g => g.value));
+    const maxVal = Math.max(...Object.values(grouped));
 
-    // 5. Render Rows
+    // 4. Render Rows
     Object.keys(grouped).forEach(key => {
       const tr = document.createElement('tr');
-      const val = grouped[key].value;
+      const val = grouped[key];
       const pct = (val / maxVal) * 100;
 
       tr.innerHTML = `
-        <td class="label-cell">${key}</td>
+        <td class="clickable-cell">${key}</td>
         <td>
-          <div class="bar-wrap">
-            <div class="bar-bg"><div class="bar-fill" style="width: ${pct}%"></div></div>
-            <span class="bar-text">${val.toLocaleString()}</span>
+          <div class="bar-container">
+            <div class="bar-fill" style="width: ${pct}%"><span class="bar-label">${val.toLocaleString()}</span></div>
           </div>
         </td>
       `;
 
-      // CLICK EVENT: Re-render the same tile for the next level
-      tr.onclick = () => {
-        if (currentLevel < dims.length - 1) {
-          this.drillStack.push({ level: currentLevel, value: key });
-          this.renderViz();
+      // CLICK EVENT: Show Custom Menu
+      tr.onclick = (e) => {
+        if (this.currentLevel === 0) {
+          this.showMenu(e, key, menu);
         }
       };
-      body.appendChild(tr);
+      tableBody.appendChild(tr);
     });
 
-    // Handle clicking back in breadcrumbs
-    document.getElementById('go-home').onclick = () => { this.drillStack = []; this.renderViz(); };
-    document.querySelectorAll('.drill-back').forEach(el => {
-      el.onclick = (e) => {
-        const idx = parseInt(e.target.getAttribute('data-index'));
-        this.drillStack = this.drillStack.slice(0, idx + 1);
-        this.renderViz();
-      };
-    });
+    // Navigation Events
+    document.getElementById('back-home').onclick = () => { this.currentLevel = 0; this.drillFilter = null; this.renderViz(); };
+    if (this.currentLevel > 0) {
+        document.getElementById('back-prev').onclick = () => { this.currentLevel = 0; this.renderViz(); };
+    }
+    
+    // Hide menu on outside click
+    window.onclick = () => { menu.style.display = 'none'; };
+  },
+
+  showMenu: function(e, value, menu) {
+    e.stopPropagation();
+    menu.style.display = 'block';
+    menu.style.left = e.pageX + 'px';
+    menu.style.top = e.pageY + 'px';
+
+    menu.innerHTML = `
+      <div class="drill-menu-item" id="drill-sub">By Sub Category</div>
+      <div class="drill-menu-item" id="drill-seg">By Segment</div>
+    `;
+
+    document.getElementById('drill-sub').onclick = () => {
+      this.currentLevel = 1;
+      this.drillFilter = value;
+      this.renderViz();
+    };
+
+    document.getElementById('drill-seg').onclick = () => {
+      this.currentLevel = 2;
+      this.drillFilter = value;
+      this.renderViz();
+    };
   }
 });
