@@ -1,90 +1,121 @@
 looker.plugins.visualizations.add({
+  // 1. Create the UI and Breadcrumb container
   create: function(element, config) {
     element.innerHTML = `
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap');
-        .viz-container { font-family: 'Open Sans', sans-serif; padding: 10px; }
-        .breadcrumbs { margin-bottom: 15px; font-size: 14px; }
-        .step { color: #4285f4; font-weight: bold; cursor: pointer; }
-        .current { color: #000; font-weight: bold; margin-left: 5px; }
+        .viz-container { font-family: 'Open Sans', sans-serif; padding: 15px; color: #333; height: 100%; overflow-y: auto; }
+        .breadcrumb-nav { margin-bottom: 15px; font-size: 14px; display: flex; align-items: center; }
+        .breadcrumb-item { color: #4285F4; font-weight: bold; cursor: pointer; text-decoration: none; }
+        .breadcrumb-item:hover { text-decoration: underline; }
+        .breadcrumb-sep { margin: 0 8px; color: #999; }
+        .breadcrumb-last { color: #000; font-weight: bold; }
+        
         .viz-table { width: 100%; border-collapse: collapse; }
-        .viz-table th { text-align: left; font-size: 12px; color: #707781; border-bottom: 1px solid #EAEAEA; padding: 8px; }
-        .viz-table td { padding: 10px 8px; border-bottom: 1px solid #F5F5F5; font-size: 13px; vertical-align: middle; }
-        .drillable-link { color: #262D33; cursor: pointer; text-decoration: none; }
-        .drillable-link:hover { text-decoration: underline; color: #4285f4; }
-        .bar-container { display: flex; align-items: center; width: 100%; }
-        .bar-bg { background: #f0f0f0; flex-grow: 1; height: 20px; position: relative; cursor: pointer; }
+        .viz-table th { text-align: left; font-size: 11px; color: #707781; text-transform: uppercase; border-bottom: 1px solid #EAEAEA; padding-bottom: 8px; }
+        .viz-table td { padding: 10px 5px; border-bottom: 1px solid #F5F5F5; }
+        
+        .label-cell { cursor: pointer; color: #262D33; font-size: 13px; width: 30%; }
+        .label-cell:hover { color: #4285F4; text-decoration: underline; }
+        
+        .bar-wrap { display: flex; align-items: center; width: 70%; }
+        .bar-bg { background: #f0f0f0; flex-grow: 1; height: 20px; cursor: pointer; position: relative; }
         .bar-fill { background: #E52592; height: 100%; transition: width 0.4s ease; }
-        .bar-val { margin-left: 10px; font-size: 11px; color: #666; width: 60px; }
+        .bar-text { margin-left: 10px; font-size: 12px; color: #333; width: 70px; }
       </style>
       <div class="viz-container">
-        <div class="breadcrumbs"><span class="step">Step 1</span> <span style="color:#999">></span> <span class="current">Current Viz</span></div>
+        <div id="nav" class="breadcrumb-nav"></div>
         <table class="viz-table">
-          <thead><tr id="h-row"></tr></thead>
-          <tbody id="v-body"></tbody>
+          <thead><tr id="headers"></tr></thead>
+          <tbody id="body"></tbody>
         </table>
       </div>
     `;
+    this.drillStack = []; // This tracks where we are (e.g., Furniture > Chairs)
   },
 
   updateAsync: function(data, element, config, queryResponse, details, done) {
-    const vBody = document.getElementById('v-body');
-    const hRow = document.getElementById('h-row');
-    vBody.innerHTML = "";
-    hRow.innerHTML = "";
+    this.allData = data;
+    this.fields = queryResponse.fields;
+    this.renderViz();
+    done();
+  },
 
-    const dim = queryResponse.fields.dimension_like[0];
-    const meas = queryResponse.fields.measure_like[0];
+  renderViz: function() {
+    const body = document.getElementById('body');
+    const header = document.getElementById('headers');
+    const nav = document.getElementById('nav');
+    
+    body.innerHTML = "";
+    header.innerHTML = "";
+    nav.innerHTML = "";
 
-    if (!dim || !meas) { return done(); }
+    const dims = this.fields.dimension_like;
+    const meas = this.fields.measure_like[0];
+    const currentLevel = this.drillStack.length; // 0 = Category, 1 = Subcat, etc.
 
-    hRow.innerHTML = `<th>${dim.label_short}</th><th>${meas.label_short}</th>`;
-    const maxVal = Math.max(...data.map(row => row[meas.name].value));
+    // 1. Build Breadcrumbs
+    let navHTML = `<span class="breadcrumb-item" id="go-home">All</span>`;
+    this.drillStack.forEach((step, i) => {
+      navHTML += `<span class="breadcrumb-sep">></span><span class="breadcrumb-item drill-back" data-index="${i}">${step.value}</span>`;
+    });
+    navHTML += `<span class="breadcrumb-sep">></span><span class="breadcrumb-last">Current Viz</span>`;
+    nav.innerHTML = navHTML;
 
-    data.forEach(row => {
-      const tr = document.createElement('tr');
+    // 2. Set Header for current level
+    header.innerHTML = `<th>${dims[currentLevel].label_short}</th><th>${meas.label_short}</th>`;
 
-      // 1. Dimension Cell (The Label like 'Furniture')
-      const tdLabel = document.createElement('td');
-      tdLabel.className = 'drillable-link';
-      tdLabel.innerText = row[dim.name].value;
-
-      // --- THIS BLOCK TRIGGERS THE POPUP MENU (0:04 in video) ---
-      tdLabel.onclick = (event) => {
-        event.preventDefault(); // Stops the big modal from opening
-        event.stopPropagation();
-        LookerCharts.Utils.openDrillMenu({
-          links: row[dim.name].links, 
-          event: event
-        });
-      };
-      tr.appendChild(tdLabel);
-
-      // 2. Measure Cell (The Pink Bar)
-      const tdBar = document.createElement('td');
-      const val = row[meas.name].value;
-      const pct = (val / maxVal) * 100;
-      tdBar.innerHTML = `
-        <div class="bar-container">
-          <div class="bar-bg"><div class="bar-fill" style="width: ${pct}%"></div></div>
-          <span class="bar-val">${val.toLocaleString()}</span>
-        </div>
-      `;
-
-      // Make the bar also trigger the same popup menu
-      tdBar.onclick = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        LookerCharts.Utils.openDrillMenu({
-          links: row[dim.name].links,
-          event: event
-        });
-      };
-
-      tr.appendChild(tdBar);
-      vBody.appendChild(tr);
+    // 3. Filter Data based on drill stack
+    let filteredData = this.allData;
+    this.drillStack.forEach((step, i) => {
+      filteredData = filteredData.filter(row => row[dims[i].name].value === step.value);
     });
 
-    done();
+    // 4. Group data by the current dimension level
+    const grouped = {};
+    filteredData.forEach(row => {
+      const key = row[dims[currentLevel].name].value;
+      const val = row[meas.name].value;
+      if (!grouped[key]) { grouped[key] = { value: 0, row: row }; }
+      grouped[key].value += val;
+    });
+
+    const maxVal = Math.max(...Object.values(grouped).map(g => g.value));
+
+    // 5. Render Rows
+    Object.keys(grouped).forEach(key => {
+      const tr = document.createElement('tr');
+      const val = grouped[key].value;
+      const pct = (val / maxVal) * 100;
+
+      tr.innerHTML = `
+        <td class="label-cell">${key}</td>
+        <td>
+          <div class="bar-wrap">
+            <div class="bar-bg"><div class="bar-fill" style="width: ${pct}%"></div></div>
+            <span class="bar-text">${val.toLocaleString()}</span>
+          </div>
+        </td>
+      `;
+
+      // CLICK EVENT: Re-render the same tile for the next level
+      tr.onclick = () => {
+        if (currentLevel < dims.length - 1) {
+          this.drillStack.push({ level: currentLevel, value: key });
+          this.renderViz();
+        }
+      };
+      body.appendChild(tr);
+    });
+
+    // Handle clicking back in breadcrumbs
+    document.getElementById('go-home').onclick = () => { this.drillStack = []; this.renderViz(); };
+    document.querySelectorAll('.drill-back').forEach(el => {
+      el.onclick = (e) => {
+        const idx = parseInt(e.target.getAttribute('data-index'));
+        this.drillStack = this.drillStack.slice(0, idx + 1);
+        this.renderViz();
+      };
+    });
   }
 });
