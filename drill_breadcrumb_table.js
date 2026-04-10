@@ -1,101 +1,128 @@
 looker.plugins.visualizations.add({
-  // Initial setup of the visualization container
+  // 1. Create the container and define the styles
   create: function(element, config) {
-    element.style.fontFamily = ` -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif`;
     element.innerHTML = `
       <style>
-        .viz-container { height: 100%; display: flex; flex-direction: column; padding: 10px; }
-        .breadcrumbs { font-size: 14px; font-weight: bold; margin-bottom: 20px; color: #333; }
-        .breadcrumbs span.active { color: #000; }
-        .breadcrumbs a { color: #4285F4; text-decoration: none; cursor: pointer; }
-        .viz-table { width: 100%; border-collapse: collapse; }
-        .viz-table th { text-align: left; border-bottom: 1px solid #C1C6CC; padding: 8px; font-size: 12px; color: #707781; }
-        .viz-table td { padding: 10px 8px; border-bottom: 1px solid #EAEAEA; font-size: 13px; }
-        .bar-container { background: #f2f2f2; width: 100%; height: 20px; position: relative; }
-        .bar-fill { background: #E52592; height: 100%; transition: width 0.5s ease; cursor: pointer; }
-        .bar-label { position: absolute; right: -40px; top: 0; font-size: 11px; color: #333; }
-        .clickable-cell { color: #262D33; cursor: pointer; }
-        .clickable-cell:hover { text-decoration: underline; background: #f9f9f9; }
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap');
+        .viz-wrapper {
+          font-family: 'Open Sans', sans-serif;
+          padding: 15px;
+          color: #333;
+        }
+        .breadcrumb-container {
+          margin-bottom: 20px;
+          font-size: 14px;
+        }
+        .step-text { color: #4285F4; font-weight: 600; }
+        .separator { color: #999; margin: 0 8px; }
+        .current-viz-text { color: #000; font-weight: 700; }
+
+        .viz-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .viz-table th {
+          text-align: left;
+          font-size: 11px;
+          text-transform: uppercase;
+          color: #707781;
+          border-bottom: 1px solid #EAEAEA;
+          padding-bottom: 8px;
+        }
+        .viz-table td { padding: 12px 0; border-bottom: 1px solid #F8F8F8; vertical-align: middle; }
+
+        /* The label (e.g., Furniture) */
+        .category-label {
+          cursor: pointer;
+          color: #262D33;
+          font-size: 13px;
+          width: 30%;
+          text-decoration: none;
+        }
+        .category-label:hover { text-decoration: underline; color: #4285F4; }
+
+        /* The Pink Bar */
+        .bar-area { width: 70%; display: flex; align-items: center; }
+        .bar-bg { background: #F0F0F0; flex-grow: 1; height: 22px; cursor: pointer; position: relative; }
+        .bar-fill { background: #E52592; height: 100%; transition: width 0.5s ease; }
+        .bar-value { margin-left: 10px; font-size: 12px; color: #333; width: 60px; text-align: left; }
       </style>
-      <div class="viz-container">
-        <div id="breadcrumb-nav" class="breadcrumbs">Current Viz</div>
+      <div class="viz-wrapper">
+        <div class="breadcrumb-container">
+          <span class="step-text">Step 1</span>
+          <span class="separator">></span>
+          <span class="current-viz-text">Current Viz</span>
+        </div>
         <table class="viz-table">
           <thead>
-            <tr id="table-headers"></tr>
+            <tr id="header-row"></tr>
           </thead>
-          <tbody id="table-body"></tbody>
+          <tbody id="viz-body"></tbody>
         </table>
       </div>
     `;
   },
 
   updateAsync: function(data, element, config, queryResponse, details, done) {
-    const tableBody = document.getElementById('table-body');
-    const tableHeaders = document.getElementById('table-headers');
-    const breadcrumbNav = document.getElementById('breadcrumb-nav');
+    const body = document.getElementById('viz-body');
+    const header = document.getElementById('header-row');
+    body.innerHTML = "";
+    header.innerHTML = "";
 
-    // 1. Clear previous content
-    tableBody.innerHTML = "";
-    tableHeaders.innerHTML = "";
+    // Identify the dimension (e.g. Category) and measure (e.g. Sales)
+    const dim = queryResponse.fields.dimension_like[0];
+    const meas = queryResponse.fields.measure_like[0];
 
-    // 2. Handle Breadcrumbs (Simulated for this view)
-    // In a real app, you'd track state, but here we match the "Current Viz" UI
-    breadcrumbNav.innerHTML = `Step 1 &nbsp; > &nbsp; <span class="active">Current Viz</span>`;
+    if (!dim || !meas) {
+      element.innerHTML = "Error: Please select one dimension and one measure.";
+      return done();
+    }
 
-    // 3. Create Headers
-    queryResponse.fields.dimension_like.forEach(dim => {
-      tableHeaders.innerHTML += `<th>${dim.label_short || dim.label}</th>`;
-    });
-    queryResponse.fields.measure_like.forEach(meas => {
-      tableHeaders.innerHTML += `<th>${meas.label_short || meas.label}</th>`;
-    });
+    // Set Column Headers
+    header.innerHTML = `<th>${dim.label_short}</th><th>${meas.label_short}</th>`;
 
-    // 4. Get max value for bar scaling
-    const measureKey = queryResponse.fields.measure_like[0].name;
-    const maxValue = Math.max(...data.map(row => row[measureKey].value));
+    // Calculate Max Value for bar scaling
+    const maxValue = Math.max(...data.map(row => row[meas.name].value));
 
-    // 5. Render Rows
-    data.forEach((row) => {
+    // Build the rows
+    data.forEach(row => {
       const tr = document.createElement('tr');
 
-      // Dimension Cell (Label)
-      const dimKey = queryResponse.fields.dimension_like[0].name;
-      const dimCell = document.createElement('td');
-      dimCell.className = "clickable-cell";
-      dimCell.innerText = row[dimKey].value;
+      // 1. DIMENSION CELL (Label)
+      const tdLabel = document.createElement('td');
+      tdLabel.className = 'category-label';
+      tdLabel.innerText = row[dim.name].value;
       
-      // --- IMPORTANT: This part creates the POPUP DRILL MENU ---
-      dimCell.onclick = (event) => {
+      // TRIGGER THE POPUP DRILL MENU HERE
+      tdLabel.onclick = (event) => {
         LookerCharts.Utils.openDrillMenu({
-          links: row[dimKey].links,
+          links: row[dim.name].links, // Pulls the 'drill_fields' from your LookML
           event: event
         });
       };
-      tr.appendChild(dimCell);
+      tr.appendChild(tdLabel);
 
-      // Measure Cell (The Pink Bar)
-      const measCell = document.createElement('td');
-      const val = row[measureKey].value;
+      // 2. MEASURE CELL (Pink Bar)
+      const tdBar = document.createElement('td');
+      const val = row[meas.name].value;
       const pct = (val / maxValue) * 100;
-      
-      measCell.innerHTML = `
-        <div class="bar-container">
-          <div class="bar-fill" style="width: ${pct}%">
-             <span class="bar-label">${val.toLocaleString()}</span>
+
+      tdBar.innerHTML = `
+        <div class="bar-area">
+          <div class="bar-bg">
+            <div class="bar-fill" style="width: ${pct}%"></div>
           </div>
+          <span class="bar-value">${val.toLocaleString()}</span>
         </div>
       `;
-      
-      // Make the bar also trigger the drill menu
-      measCell.onclick = (event) => {
+
+      // Make the Bar also trigger the popup menu
+      tdBar.onclick = (event) => {
         LookerCharts.Utils.openDrillMenu({
-          links: row[dimKey].links,
+          links: row[dim.name].links,
           event: event
         });
       };
 
-      tr.appendChild(measCell);
-      tableBody.appendChild(tr);
+      tr.appendChild(tdBar);
+      body.appendChild(tr);
     });
 
     done();
