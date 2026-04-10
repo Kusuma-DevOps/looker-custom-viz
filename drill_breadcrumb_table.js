@@ -1,101 +1,158 @@
 looker.plugins.visualizations.add({
-  // Initial setup of the visualization container
+  // 1. Setup the basic containers
   create: function(element, config) {
-    element.style.fontFamily = ` -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif`;
     element.innerHTML = `
       <style>
-        .viz-container { height: 100%; display: flex; flex-direction: column; padding: 10px; }
-        .breadcrumbs { font-size: 14px; font-weight: bold; margin-bottom: 20px; color: #333; }
-        .breadcrumbs span.active { color: #000; }
-        .breadcrumbs a { color: #4285F4; text-decoration: none; cursor: pointer; }
-        .viz-table { width: 100%; border-collapse: collapse; }
-        .viz-table th { text-align: left; border-bottom: 1px solid #C1C6CC; padding: 8px; font-size: 12px; color: #707781; }
-        .viz-table td { padding: 10px 8px; border-bottom: 1px solid #EAEAEA; font-size: 13px; }
-        .bar-container { background: #f2f2f2; width: 100%; height: 20px; position: relative; }
-        .bar-fill { background: #E52592; height: 100%; transition: width 0.5s ease; cursor: pointer; }
-        .bar-label { position: absolute; right: -40px; top: 0; font-size: 11px; color: #333; }
-        .clickable-cell { color: #262D33; cursor: pointer; }
-        .clickable-cell:hover { text-decoration: underline; background: #f9f9f9; }
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap');
+        .custom-viz-container {
+          font-family: 'Open Sans', sans-serif;
+          padding: 20px;
+          color: #333;
+        }
+        .breadcrumb-row {
+          margin-bottom: 25px;
+          font-size: 14px;
+        }
+        .step-link {
+          color: #4285F4;
+          text-decoration: none;
+          font-weight: 600;
+        }
+        .current-viz {
+          color: #000;
+          font-weight: 700;
+          margin-left: 8px;
+        }
+        .viz-table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+        .viz-table th {
+          text-align: left;
+          font-size: 12px;
+          text-transform: uppercase;
+          color: #707781;
+          border-bottom: 1px solid #EAEAEA;
+          padding: 8px;
+        }
+        .viz-table td {
+          padding: 12px 8px;
+          border-bottom: 1px solid #F4F4F4;
+          font-size: 13px;
+        }
+        .label-cell {
+          cursor: pointer;
+          color: #262D33;
+          width: 30%;
+        }
+        .label-cell:hover {
+          text-decoration: underline;
+        }
+        .bar-wrapper {
+          display: flex;
+          align-items: center;
+          width: 70%;
+        }
+        .bar-background {
+          background-color: #F0F0F0;
+          height: 22px;
+          flex-grow: 1;
+          position: relative;
+          cursor: pointer;
+        }
+        .bar-fill {
+          background-color: #E52592; /* The Pink Color from your video */
+          height: 100%;
+          transition: width 0.4s ease-out;
+        }
+        .bar-value {
+          margin-left: 10px;
+          font-size: 12px;
+          color: #333;
+          min-width: 50px;
+        }
       </style>
-      <div class="viz-container">
-        <div id="breadcrumb-nav" class="breadcrumbs">Current Viz</div>
+      <div class="custom-viz-container">
+        <div class="breadcrumb-row" id="breadcrumbs">
+           <a href="#" class="step-link">Step 1</a> 
+           <span style="color: #999; margin: 0 5px;">&nbsp; | &nbsp;</span> 
+           <span class="current-viz">Current Viz</span>
+        </div>
         <table class="viz-table">
           <thead>
-            <tr id="table-headers"></tr>
+            <tr id="headers"></tr>
           </thead>
-          <tbody id="table-body"></tbody>
+          <tbody id="rows-container"></tbody>
         </table>
       </div>
     `;
   },
 
   updateAsync: function(data, element, config, queryResponse, details, done) {
-    const tableBody = document.getElementById('table-body');
-    const tableHeaders = document.getElementById('table-headers');
-    const breadcrumbNav = document.getElementById('breadcrumb-nav');
+    const container = document.getElementById('rows-container');
+    const headerRow = document.getElementById('headers');
+    
+    // Clear previous data
+    container.innerHTML = "";
+    headerRow.innerHTML = "";
 
-    // 1. Clear previous content
-    tableBody.innerHTML = "";
-    tableHeaders.innerHTML = "";
+    // Identify Dimensions and Measures
+    const dimension = queryResponse.fields.dimension_like[0];
+    const measure = queryResponse.fields.measure_like[0];
 
-    // 2. Handle Breadcrumbs (Simulated for this view)
-    // In a real app, you'd track state, but here we match the "Current Viz" UI
-    breadcrumbNav.innerHTML = `Step 1 &nbsp; > &nbsp; <span class="active">Current Viz</span>`;
+    if (!dimension || !measure) {
+       element.innerHTML = "Please provide at least one dimension and one measure.";
+       return done();
+    }
 
-    // 3. Create Headers
-    queryResponse.fields.dimension_like.forEach(dim => {
-      tableHeaders.innerHTML += `<th>${dim.label_short || dim.label}</th>`;
-    });
-    queryResponse.fields.measure_like.forEach(meas => {
-      tableHeaders.innerHTML += `<th>${meas.label_short || meas.label}</th>`;
-    });
+    // Set Headers
+    headerRow.innerHTML = `<th>${dimension.label_short}</th><th>${measure.label_short}</th>`;
 
-    // 4. Get max value for bar scaling
-    const measureKey = queryResponse.fields.measure_like[0].name;
-    const maxValue = Math.max(...data.map(row => row[measureKey].value));
+    // Find max value for scaling the bars
+    const maxValue = Math.max(...data.map(row => row[measure.name].value));
 
-    // 5. Render Rows
-    data.forEach((row) => {
+    // Render Rows
+    data.forEach(row => {
       const tr = document.createElement('tr');
 
-      // Dimension Cell (Label)
-      const dimKey = queryResponse.fields.dimension_like[0].name;
-      const dimCell = document.createElement('td');
-      dimCell.className = "clickable-cell";
-      dimCell.innerText = row[dimKey].value;
+      // 1. Dimension Column (The Text)
+      const tdLabel = document.createElement('td');
+      tdLabel.className = 'label-cell';
+      tdLabel.innerText = row[dimension.name].value;
       
-      // --- IMPORTANT: This part creates the POPUP DRILL MENU ---
-      dimCell.onclick = (event) => {
+      // Trigger Drill Menu on Click
+      tdLabel.onclick = (event) => {
         LookerCharts.Utils.openDrillMenu({
-          links: row[dimKey].links,
+          links: row[dimension.name].links,
           event: event
         });
       };
-      tr.appendChild(dimCell);
+      tr.appendChild(tdLabel);
 
-      // Measure Cell (The Pink Bar)
-      const measCell = document.createElement('td');
-      const val = row[measureKey].value;
+      // 2. Measure Column (The Pink Bar)
+      const tdBar = document.createElement('td');
+      const val = row[measure.name].value;
       const pct = (val / maxValue) * 100;
-      
-      measCell.innerHTML = `
-        <div class="bar-container">
-          <div class="bar-fill" style="width: ${pct}%">
-             <span class="bar-label">${val.toLocaleString()}</span>
+
+      tdBar.innerHTML = `
+        <div class="bar-wrapper">
+          <div class="bar-background">
+            <div class="bar-fill" style="width: ${pct}%"></div>
           </div>
+          <span class="bar-value">${val.toLocaleString()}</span>
         </div>
       `;
-      
-      // Make the bar also trigger the drill menu
-      measCell.onclick = (event) => {
+
+      // Trigger Drill Menu when Bar is clicked
+      tdBar.onclick = (event) => {
         LookerCharts.Utils.openDrillMenu({
-          links: row[dimKey].links,
+          links: row[dimension.name].links,
           event: event
         });
       };
 
-      tr.appendChild(measCell);
-      tableBody.appendChild(tr);
+      tr.appendChild(tdBar);
+      container.appendChild(tr);
     });
 
     done();
