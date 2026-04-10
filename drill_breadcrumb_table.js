@@ -12,6 +12,13 @@ looker.plugins.visualizations.add({
       label: "Show Row Numbers",
       default: true,
       section: "Styling"
+    },
+    // NEW OPTION: Toggle values on bars
+    show_values: {
+      type: "boolean",
+      label: "Show Values",
+      default: true,
+      section: "Styling"
     }
   },
 
@@ -22,12 +29,12 @@ looker.plugins.visualizations.add({
         .breadcrumbs { font-size: 14px; margin-bottom: 15px; font-weight: bold; color: #333; }
         .breadcrumb-link { color: #4285F4; cursor: pointer; text-decoration: none; }
         .breadcrumb-link:hover { text-decoration: underline; }
-        .viz-table { width: 100%; border-collapse: collapse; }
+        .viz-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .viz-table th { text-align: left; font-size: 11px; color: #707781; border-bottom: 1px solid #EAEAEA; padding: 8px; text-transform: uppercase; }
-        .viz-table td { padding: 10px 8px; border-bottom: 1px solid #F5F5F5; font-size: 13px; color: #262D33; }
+        .viz-table td { padding: 10px 8px; border-bottom: 1px solid #F5F5F5; font-size: 13px; color: #262D33; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .bar-bg { background: #f0f0f0; height: 22px; width: 100%; position: relative; cursor: pointer; }
         .bar-fill { height: 100%; transition: width 0.4s ease-out; }
-        .bar-label { position: absolute; right: -55px; top: 3px; font-size: 11px; color: #333; }
+        .bar-label { position: absolute; right: 5px; top: 3px; font-size: 11px; color: #333; font-weight: bold; text-shadow: 0px 0px 2px #fff; }
         .drill-menu-popup {
           position: fixed; background: white; border: 1px solid #d1d1d1;
           box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: none; z-index: 2000;
@@ -36,6 +43,7 @@ looker.plugins.visualizations.add({
         .menu-header { padding: 8px 15px; font-size: 11px; color: #999; border-bottom: 1px solid #eee; text-transform: uppercase; }
         .menu-item { padding: 10px 15px; cursor: pointer; font-size: 13px; }
         .menu-item:hover { background: #F5F7F9; color: #4285F4; }
+        .col-row-num { width: 30px; color: #C1C1C1 !important; font-size: 11px !important; }
       </style>
       <div class="viz-container">
         <div id="nav" class="breadcrumbs"></div>
@@ -46,10 +54,6 @@ looker.plugins.visualizations.add({
         </table>
       </div>
     `;
-    // Each stack entry: { fieldName, value, nextDimIndex }
-    // fieldName    = dimension field we filtered on (e.g. category field name)
-    // value        = value clicked (e.g. "Sweaters")
-    // nextDimIndex = which dimension index to display next
     this.drillStack = [];
   },
 
@@ -72,12 +76,10 @@ looker.plugins.visualizations.add({
     const meas = this.fields.measure_like[0];
 
     if (!dims || dims.length === 0 || !meas) {
-      body.innerHTML = '<tr><td colspan="2" style="padding:20px;text-align:center;color:#999">Add at least one dimension and one measure.</td></tr>';
+      body.innerHTML = '<tr><td colspan="3" style="padding:20px;text-align:center;color:#999">Add at least one dimension and one measure.</td></tr>';
       return;
     }
 
-    // ── KEY FIX: currentDimIndex comes from the last stack entry's nextDimIndex
-    // not from drillStack.length
     const currentDimIndex = this.drillStack.length === 0
       ? 0
       : this.drillStack[this.drillStack.length - 1].nextDimIndex;
@@ -91,11 +93,10 @@ looker.plugins.visualizations.add({
       navHTML += ` <span style="color:#999">›</span> `;
       navHTML += `<span class="breadcrumb-link drill-back" data-index="${i}">${step.value}</span>`;
     });
-    navHTML += ` <span style="color:#999">›</span> <span style="color:#000">Current Viz</span>`;
+    navHTML += ` <span style="color:#999">›</span> <span style="color:#000">${currentDim.label_short || currentDim.label}</span>`;
     nav.innerHTML = navHTML;
 
-    // ── 2. Filter data using stored fieldName from each stack entry ─
-    // KEY FIX: use step.fieldName instead of dims[i].name
+    // ── 2. Filter data ──────────────────────────────────────
     let filteredData = this.data;
     this.drillStack.forEach((step) => {
       filteredData = filteredData.filter(row => {
@@ -104,7 +105,7 @@ looker.plugins.visualizations.add({
       });
     });
 
-    // ── 3. Aggregate by current dimension ──────────────────
+    // ── 3. Aggregate ────────────────────────────────────────
     const aggregated = {};
     filteredData.forEach(row => {
       const dCell = row[currentDim.name];
@@ -119,28 +120,44 @@ looker.plugins.visualizations.add({
     const sortedKeys = Object.keys(aggregated).sort((a, b) => aggregated[b] - aggregated[a]);
     const maxVal     = sortedKeys.length > 0 ? Math.max(...Object.values(aggregated)) : 1;
 
-    // ── 4. Headers ─────────────────────────────────────────
+    // ── 4. Headers (Respecting Row Numbers) ─────────────────
     const dimLabel  = currentDim.label_short || currentDim.label;
     const measLabel = meas.label_short || meas.label;
-    head.innerHTML  = `<th style="width:35%">${dimLabel}</th><th style="width:65%">${measLabel}</th>`;
+    
+    let headerHTML = "";
+    if (this.config.show_row_numbers) {
+      headerHTML += `<th class="col-row-num">#</th>`;
+    }
+    headerHTML += `<th style="width:35%">${dimLabel}</th><th style="width:65%">${measLabel}</th>`;
+    head.innerHTML = headerHTML;
 
     // ── 5. Rows ────────────────────────────────────────────
     const canDrill = currentDimIndex < dims.length - 1;
 
-    sortedKeys.forEach(key => {
+    sortedKeys.forEach((key, index) => {
       const val = aggregated[key];
       const pct = maxVal > 0 ? (val / maxVal) * 100 : 0;
       const tr  = document.createElement('tr');
 
-      tr.innerHTML = `
-        <td style="width:35%;${canDrill ? 'cursor:pointer;font-weight:600;color:#4285F4;' : ''}">${key}</td>
-        <td style="width:65%;">
+      // Check if we should show the value label
+      const valueLabel = this.config.show_values ? `<span class="bar-label">${val.toLocaleString()}</span>` : '';
+
+      let rowHTML = "";
+      if (this.config.show_row_numbers) {
+        rowHTML += `<td class="col-row-num">${index + 1}</td>`;
+      }
+
+      rowHTML += `
+        <td style="${canDrill ? 'cursor:pointer;font-weight:600;color:#4285F4;' : ''}">${key}</td>
+        <td>
           <div class="bar-bg">
             <div class="bar-fill" style="width:${pct}%;background:${this.config.bar_color || '#E52592'}"></div>
-            <span class="bar-label">${val.toLocaleString()}</span>
+            ${valueLabel}
           </div>
         </td>
       `;
+      
+      tr.innerHTML = rowHTML;
 
       if (canDrill) {
         tr.onclick = (e) => {
@@ -160,7 +177,6 @@ looker.plugins.visualizations.add({
       el.onclick = (e) => {
         e.stopPropagation();
         const idx = parseInt(e.target.getAttribute('data-index'));
-        // Slice stack back to clicked crumb (inclusive)
         this.drillStack = this.drillStack.slice(0, idx + 1);
         this.render();
       };
@@ -176,7 +192,6 @@ looker.plugins.visualizations.add({
     menu.style.left    = e.clientX + 'px';
     menu.style.top     = (e.clientY + 4) + 'px';
 
-    // Build menu showing all remaining dimensions
     let menuHTML = `<div class="menu-header">Drill into ${value}</div>`;
     for (let i = currentIndex + 1; i < dims.length; i++) {
       const label = dims[i].label_short || dims[i].label;
@@ -184,15 +199,14 @@ looker.plugins.visualizations.add({
     }
     menu.innerHTML = menuHTML;
 
-    // KEY FIX: store fieldName + value + nextDimIndex correctly
     menu.querySelectorAll('.menu-item').forEach(item => {
       item.onclick = (ev) => {
         ev.stopPropagation();
         const targetDimIndex = parseInt(item.getAttribute('data-dim-index'));
         this.drillStack.push({
-          fieldName:    currentFieldName,  // field we are filtering on
-          value:        value,             // value that was clicked
-          nextDimIndex: targetDimIndex     // which dimension index to show next
+          fieldName:    currentFieldName,
+          value:        value,
+          nextDimIndex: targetDimIndex
         });
         menu.style.display = 'none';
         this.render();
