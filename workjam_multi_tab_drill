@@ -1,52 +1,63 @@
 looker.plugins.visualizations.add({
-  // 1. CREATE THE CONFIGURATION MENU (SIDEBAR)
   options: {
     tab1_label: { type: 'string', label: 'Tab 1: Label', default: 'Level', order: 1 },
-    tab1_fields: { type: 'string', label: 'Tab 1: Fields (Comma separated IDs)', default: '', placeholder: 'view.field_name, view.field_name', order: 2 },
-    
+    tab1_fields: { type: 'string', label: 'Tab 1: Fields (IDs)', default: '', placeholder: 'tasks.task_name, tasks.task_status', order: 2 },
     tab2_label: { type: 'string', label: 'Tab 2: Label', default: 'Location', order: 3 },
-    tab2_fields: { type: 'string', label: 'Tab 2: Fields (Comma separated IDs)', default: '', placeholder: 'view.field_name, view.field_name', order: 4 },
-    
+    tab2_fields: { type: 'string', label: 'Tab 2: Fields (IDs)', default: '', placeholder: 'region_hierarchy.location_name', order: 4 },
     tab3_label: { type: 'string', label: 'Tab 3: Label', default: 'Media', order: 5 },
-    tab3_fields: { type: 'string', label: 'Tab 3: Fields (Comma separated IDs)', default: '', placeholder: 'view.field_name, view.field_name', order: 6 },
-    
+    tab3_fields: { type: 'string', label: 'Tab 3: Fields (IDs)', default: '', placeholder: 'tasks.task_id', order: 6 },
     back_button_label: { type: 'string', label: 'Back Button Text', default: '← BACK TO SUMMARY', order: 7 }
   },
 
   create: function(element, config) {
-    element.innerHTML = `<div id="viz-container" style="height:100%; width:100%; overflow:auto; font-family: 'Open Sans', 'Helvetica', sans-serif;"></div>`;
+    element.innerHTML = `<div id="v-container" style="height:100%; width:100%; overflow:auto; font-family: sans-serif;"></div>`;
     this.vizState = { view: 'summary', selectedValue: null, activeTab: 'tab1' };
   },
 
   updateAsync: function(data, element, config, queryResponse, details, done) {
-    const container = document.getElementById('viz-container');
+    const container = element.querySelector('#v-container');
     const viz = this;
-    const fields = queryResponse.fields.dimension_like.concat(queryResponse.fields.measure_like);
     
-    // Helper to get raw data
-    const getVal = (row, fieldName) => row[fieldName]?.value ?? "";
+    // Clear previous errors
+    this.clearErrors();
+
+    // 1. Check if data exists
+    if (!data || data.length === 0) {
+      container.innerHTML = `<div style="padding:20px; color:#666;">No data found. Please run a query.</div>`;
+      return done();
+    }
+
+    const fields = queryResponse.fields.dimension_like.concat(queryResponse.fields.measure_like);
+    if (fields.length === 0) {
+      this.addError({title: "No Fields", message: "Please select at least one dimension and one measure."});
+      return done();
+    }
+
+    const getVal = (row, fieldName) => row[fieldName.trim()]?.value ?? "";
     const getLabel = (fieldName) => fields.find(f => f.name === fieldName.trim())?.label_short ?? fieldName;
 
-    // --- VIEW 1: SUMMARY (Automatically shows the first dimension and first measure) ---
+    // --- VIEW 1: SUMMARY ---
     if (this.vizState.view === 'summary') {
       const mainDim = fields[0].name;
-      const mainMeas = queryResponse.fields.measure_like[0]?.name;
-
-      // Group data by the first dimension
       const summaryMap = {};
       data.forEach(row => {
         const val = getVal(row, mainDim);
         summaryMap[val] = (summaryMap[val] || 0) + 1;
       });
 
-      let html = `<div style="padding:15px;"><h3 style="margin-top:0;">Summary: ${fields[0].label}</h3>
+      let html = `<div style="padding:15px;">
+        <h3 style="margin:0 0 15px 0; color:#333;">Summary by ${fields[0].label}</h3>
         <table style="width:100%; border-collapse:collapse; text-align:left;">
-          <thead style="color:#666; font-size:12px; border-bottom:1px solid #ddd;"><tr><th>${fields[0].label.toUpperCase()}</th><th>COUNT</th></tr></thead>
+          <thead style="color:#666; font-size:12px; border-bottom:2px solid #eee;">
+            <tr><th style="padding-bottom:10px;">${fields[0].label.toUpperCase()}</th><th>TASK COUNT</th></tr>
+          </thead>
           <tbody>`;
       
       Object.entries(summaryMap).forEach(([name, count]) => {
-        html += `<tr class="row-link" data-val="${name}" style="cursor:pointer; border-bottom:1px solid #eee;">
-          <td style="padding:12px 5px; color:#1a73e8;">${name}</td><td>${count}</td></tr>`;
+        html += `<tr class="row-link" data-val="${name}" style="cursor:pointer; border-bottom:1px solid #f5f5f5;">
+          <td style="padding:12px 5px; color:#1a73e8; font-weight:500;">${name}</td>
+          <td style="color:#333;">${count}</td>
+        </tr>`;
       });
       html += `</tbody></table></div>`;
       container.innerHTML = html;
@@ -60,31 +71,35 @@ looker.plugins.visualizations.add({
       });
     }
 
-    // --- VIEW 2: DETAIL (TABS) ---
+    // --- VIEW 2: DETAIL TABS ---
     else {
       const activeTabId = this.vizState.activeTab;
-      const activeTabFields = (config[activeTabId + '_fields'] || "").split(',').filter(f => f.trim() !== "");
+      const activeTabFields = (config[activeTabId + '_fields'] || "").split(',').map(f => f.trim()).filter(f => f !== "");
       const filteredData = data.filter(r => getVal(r, fields[0].name) === this.vizState.selectedValue);
 
       let html = `<div style="padding:15px;">
         <div style="display:flex; align-items:center; margin-bottom:15px;">
-          <button id="v-back" style="padding:5px 10px; cursor:pointer; border:1px solid #ccc; background:#fff; border-radius:4px;">${config.back_button_label}</button>
-          <span style="margin-left:15px; font-weight:bold; font-size:18px;">${this.vizState.selectedValue}</span>
+          <button id="v-back" style="padding:6px 12px; cursor:pointer; border:1px solid #dadce0; background:#fff; border-radius:4px; font-size:12px; color:#1a73e8;">${config.back_button_label}</button>
+          <span style="margin-left:15px; font-weight:bold; font-size:18px; color:#202124;">${this.vizState.selectedValue}</span>
         </div>
-        <div style="display:flex; border-bottom:1px solid #ddd; margin-bottom:15px;">
+        <div style="display:flex; border-bottom:1px solid #dadce0; margin-bottom:15px;">
           ${['tab1', 'tab2', 'tab3'].map(tid => `
-            <div class="v-tab" data-tab="${tid}" style="padding:10px 20px; cursor:pointer; color:${activeTabId===tid?'#1a73e8':'#666'}; border-bottom:${activeTabId===tid?'3px solid #1a73e8':'none'}; font-weight:bold;">${config[tid+'_label']}</div>
+            <div class="v-tab" data-tab="${tid}" style="padding:10px 20px; cursor:pointer; font-size:13px; color:${activeTabId===tid?'#1a73e8':'#5f6368'}; border-bottom:${activeTabId===tid?'3px solid #1a73e8':'none'}; font-weight:bold; text-transform:uppercase;">${config[tid+'_label']}</div>
           `).join('')}
         </div>
         <table style="width:100%; border-collapse:collapse; text-align:left;">
-          <thead style="background:#f9f9f9; color:#666; font-size:11px;"><tr>`;
+          <thead style="background:#f8f9fa; color:#5f6368; font-size:11px;"><tr>`;
       
-      activeTabFields.forEach(f => { html += `<th style="padding:10px;">${getLabel(f).toUpperCase()}</th>`; });
+      if (activeTabFields.length === 0) {
+        html += `<th style="padding:20px; color:#999;">No fields configured for this tab. Click 'Edit' and add field IDs.</th>`;
+      } else {
+        activeTabFields.forEach(f => { html += `<th style="padding:10px;">${getLabel(f).toUpperCase()}</th>`; });
+      }
+      
       html += `</tr></thead><tbody>`;
-
       filteredData.forEach(r => {
-        html += `<tr style="border-bottom:1px solid #eee; font-size:13px;">`;
-        activeTabFields.forEach(f => { html += `<td style="padding:10px;">${getVal(r, f.trim())}</td>`; });
+        html += `<tr style="border-bottom:1px solid #f1f3f4; font-size:13px;">`;
+        activeTabFields.forEach(f => { html += `<td style="padding:10px;">${getVal(r, f)}</td>`; });
         html += `</tr>`;
       });
       html += `</tbody></table></div>`;
