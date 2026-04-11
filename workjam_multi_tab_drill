@@ -1,0 +1,115 @@
+import React, { useState, useMemo } from 'react';
+
+const WorkJamMultiViewViz = ({ data, config, queryResponse }) => {
+  // 1. STATE MANAGEMENT
+  // view: 'summary' or 'detail'
+  const [view, setView] = useState('summary');
+  const [selectedRegion, setSelectedRegion] = useState(null);
+  const [activeTab, setActiveTab] = useState('level');
+
+  // 2. DATA PROCESSING
+  // Extracting raw data from Looker format
+  const rows = useMemo(() => data.map(d => {
+    return {
+      region: d['region_hierarchy.region3_name'].value,
+      location: d['region_hierarchy.location_name'].value,
+      task_name: d['tasks.task_name'].value,
+      status: d['tasks.task_status'].value,
+      count: d['tasks.total_tasks'].value
+    };
+  }), [data]);
+
+  // Grouping for Summary View
+  const summaryData = useMemo(() => {
+    const counts = {};
+    rows.forEach(r => {
+      counts[r.region] = (counts[r.region] || 0) + 1;
+    });
+    return Object.entries(counts).map(([name, count]) => ({ name, count }));
+  }, [rows]);
+
+  // Filtering for Detail View
+  const detailData = useMemo(() => {
+    return rows.filter(r => r.region === selectedRegion);
+  }, [rows, selectedRegion]);
+
+  // 3. RENDER SUMMARY VIEW
+  if (view === 'summary') {
+    return (
+      <div style={{ fontFamily: 'sans-serif', padding: '20px' }}>
+        <h3>Tasks by Region (Summary)</h3>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: '2px solid #eee', textAlign: 'left' }}>
+              <th>Region</th>
+              <th>Total Tasks</th>
+            </tr>
+          </thead>
+          <tbody>
+            {summaryData.map(row => (
+              <tr 
+                key={row.name} 
+                onClick={() => { setSelectedRegion(row.name); setView('detail'); }}
+                style={{ cursor: 'pointer', borderBottom: '1px solid #f9f9f9' }}
+              >
+                <td style={{ padding: '10px', color: '#4285F4' }}>{row.name}</td>
+                <td>{row.count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  // 4. RENDER DETAIL VIEW (WITH TABS)
+  return (
+    <div style={{ fontFamily: 'sans-serif', padding: '20px' }}>
+      {/* Header & Back Button */}
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '20px' }}>
+        <button onClick={() => setView('summary')} style={{ marginRight: '20px' }}>← BACK</button>
+        <h2>Region: {selectedRegion}</h2>
+      </div>
+
+      {/* TABS */}
+      <div style={{ display: 'flex', borderBottom: '1px solid #ccc', marginBottom: '20px' }}>
+        {['level', 'location', 'media'].map(tab => (
+          <div 
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              padding: '10px 20px',
+              cursor: 'pointer',
+              borderBottom: activeTab === tab ? '3px solid #4285F4' : 'none',
+              fontWeight: activeTab === tab ? 'bold' : 'normal'
+            }}
+          >
+            {tab.toUpperCase()}
+          </div>
+        ))}
+      </div>
+
+      {/* TAB CONTENT (Table switching) */}
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ borderBottom: '2px solid #eee', textAlign: 'left' }}>
+            {activeTab === 'level' && <><th>Task Name</th><th>Status</th></>}
+            {activeTab === 'location' && <><th>Location</th><th>Task Name</th></>}
+            {activeTab === 'media' && <><th>Task ID</th><th>Task Name</th><th>Media</th></>}
+          </tr>
+        </thead>
+        <tbody>
+          {detailData.map((row, i) => (
+            <tr key={i} style={{ borderBottom: '1px solid #f9f9f9' }}>
+              {activeTab === 'level' && <><td style={{padding: '8px'}}>{row.task_name}</td><td>{row.status}</td></>}
+              {activeTab === 'location' && <><td style={{padding: '8px'}}>{row.location}</td><td>{row.task_name}</td></>}
+              {activeTab === 'media' && <><td style={{padding: '8px'}}>{i}</td><td>{row.task_name}</td><td>[IMAGE]</td></>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+export default WorkJamMultiViewViz;
