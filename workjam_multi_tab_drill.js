@@ -17,21 +17,21 @@ looker.plugins.visualizations.add({
     },
     summary_group_label: {
       type: 'string',
-      label: 'Summary: Group By Column Label',
+      label: 'Summary: Group By Column Label (leave blank to use field label)',
       default: '',
       placeholder: 'e.g. Region',
       order: 3
     },
     summary_value_field: {
       type: 'string',
-      label: 'Summary: Value Field ID (right column)',
+      label: 'Summary: Value Field ID (leave blank to auto-detect first measure)',
       default: '',
       placeholder: 'e.g. tasks.total_tasks',
       order: 4
     },
     summary_value_label: {
       type: 'string',
-      label: 'Summary: Value Column Label',
+      label: 'Summary: Value Column Label (leave blank to use field label)',
       default: '',
       placeholder: 'e.g. Total Tasks',
       order: 5
@@ -128,7 +128,10 @@ looker.plugins.visualizations.add({
       return done();
     }
 
-    var allFields = queryResponse.fields.dimension_like.concat(queryResponse.fields.measure_like);
+    var dimensions = queryResponse.fields.dimension_like;
+    var measures   = queryResponse.fields.measure_like;
+    var allFields  = dimensions.concat(measures);
+
     if (allFields.length === 0) {
       this.addError({ title: 'No fields', message: 'Add at least one dimension to the query.' });
       return done();
@@ -136,18 +139,16 @@ looker.plugins.visualizations.add({
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    // Display value (prefers rendered)
     function cellVal(row, fieldId) {
       if (!fieldId) return '';
-      var id = fieldId.trim();
+      var id   = fieldId.trim();
       var cell = row[id];
       if (!cell) return '';
       if (cell.rendered != null) return cell.rendered;
-      if (cell.value  != null) return String(cell.value);
+      if (cell.value    != null) return String(cell.value);
       return '';
     }
 
-    // Raw number (for summing measures)
     function cellNum(row, fieldId) {
       if (!fieldId) return 0;
       var cell = row[fieldId.trim()];
@@ -155,43 +156,60 @@ looker.plugins.visualizations.add({
       return parseFloat(cell.value) || 0;
     }
 
-    // Looker field label fallback
     function lookerLabel(fieldId) {
       var f = allFields.find(function(x){ return x.name === fieldId.trim(); });
       return f ? (f.label_short || f.label || fieldId) : fieldId;
     }
 
-    // Parse a comma-separated config string into a trimmed array
     function parseList(str) {
       if (!str) return [];
       return str.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
     }
 
-    // Resolve column header: use custom label if provided, else Looker label, else field id
     function colHeader(customLabel, fieldId) {
       if (customLabel && customLabel.trim()) return customLabel.trim();
       return lookerLabel(fieldId);
     }
 
     // ── Config resolution ─────────────────────────────────────────────────────
-    var groupField = (config.summary_group_field || '').trim() || allFields[0].name;
+
+    // Group by: use configured field, else first dimension, else first field
+    var groupField = (config.summary_group_field || '').trim()
+      || (dimensions.length ? dimensions[0].name : allFields[0].name);
+
     var groupLabel = colHeader(config.summary_group_label, groupField);
 
-    var valueField = (config.summary_value_field || '').trim();   // blank = row count
-    var valueLabel = (config.summary_value_label || '').trim() || (valueField ? lookerLabel(valueField) : 'Row Count');
+    // Value field:
+    //   1. Use explicitly configured field if set
+    //   2. Auto-detect: first measure that is NOT the group field
+    //   3. If no measures at all, fall back to row count (and label it clearly)
+    var configuredValueField = (config.summary_value_field || '').trim();
+    var autoValueField = '';
+
+    if (configuredValueField) {
+      autoValueField = configuredValueField;
+    } else if (measures.length > 0) {
+      // pick first measure
+      autoValueField = measures[0].name;
+    }
+    // if autoValueField is still '' we will show row count as last resort
+
+    var useRowCount  = (autoValueField === '');
+    var valueField   = useRowCount ? '' : autoValueField;
+    var valueLabel   = (config.summary_value_label || '').trim()
+      || (useRowCount ? 'Row Count' : lookerLabel(valueField));
 
     var summaryTitle = (config.summary_title || 'Summary').trim();
 
     // ── SUMMARY VIEW ──────────────────────────────────────────────────────────
     if (this.vizState.view === 'summary') {
 
-      // Aggregate
       var map = {};
       data.forEach(function(row) {
         var key = cellVal(row, groupField) || '(blank)';
         if (!map[key]) map[key] = { rowCount: 0, metric: 0 };
         map[key].rowCount += 1;
-        if (valueField) map[key].metric += cellNum(row, valueField);
+        if (!useRowCount) map[key].metric += cellNum(row, valueField);
       });
 
       var entries = Object.entries(map);
@@ -200,11 +218,13 @@ looker.plugins.visualizations.add({
         return done();
       }
 
-      // Render
       var rows = entries.map(function(e) {
-        var name = e[0];
-        var agg  = e[1];
-        var display = valueField ? Number(agg.metric).toLocaleString() : agg.rowCount.toLocaleString();
+        var name    = e[0];
+        var agg     = e[1];
+        var display = useRowCount
+          ? agg.rowCount.toLocaleString()
+          : Number(agg.metric).toLocaleString();
+
         return '<tr class="vr" data-val="' + name + '" style="cursor:pointer;border-bottom:1px solid #f0f0f0;">'
           + '<td style="padding:11px 8px;color:#1a73e8;font-weight:500;">' + name + '</td>'
           + '<td style="padding:11px 8px;color:#333;">' + display + '</td>'
@@ -236,8 +256,7 @@ looker.plugins.visualizations.add({
     }
 
     // ── DETAIL / TAB VIEW ─────────────────────────────────────────────────────
-    var activeTab = this.vizState.activeTab;
-
+    var activeTab  = this.vizState.activeTab;
     var tabFields  = parseList(config[activeTab + '_fields']);
     var tabLabels  = parseList(config[activeTab + '_labels']);
 
@@ -245,7 +264,6 @@ looker.plugins.visualizations.add({
       return (cellVal(r, groupField) || '(blank)') === viz.vizState.selectedValue;
     });
 
-    // Tab bar
     var tabBar = ['tab1','tab2','tab3'].map(function(tid) {
       var active = tid === activeTab;
       return '<div class="vtab" data-tab="' + tid + '" style="'
@@ -256,7 +274,6 @@ looker.plugins.visualizations.add({
         + '</div>';
     }).join('');
 
-    // Table
     var tableHtml = '';
     if (!tabFields.length) {
       tableHtml = '<div style="padding:20px;color:#999;">No fields set for this tab — click <strong>Edit</strong> and fill in the Field IDs.</div>';
@@ -294,7 +311,6 @@ looker.plugins.visualizations.add({
       + tableHtml
       + '</div>';
 
-    // Back button
     var backBtn = container.querySelector('#vback');
     if (backBtn) {
       backBtn.onclick = function() {
@@ -303,7 +319,6 @@ looker.plugins.visualizations.add({
       };
     }
 
-    // Tab switching
     container.querySelectorAll('.vtab').forEach(function(el) {
       el.onmouseover = function(){ if(el.dataset.tab !== viz.vizState.activeTab) el.style.color='#202124'; };
       el.onmouseout  = function(){ if(el.dataset.tab !== viz.vizState.activeTab) el.style.color='#5f6368'; };
