@@ -144,10 +144,7 @@ looker.plugins.visualizations.add({
       return done();
     }
 
-    var dimensions = queryResponse.fields.dimension_like;
-    var measures   = queryResponse.fields.measure_like;
-    var allFields  = dimensions.concat(measures);
-
+    var allFields = queryResponse.fields.dimension_like.concat(queryResponse.fields.measure_like);
     if (allFields.length === 0) {
       this.addError({ title: 'No fields', message: 'Add at least one dimension to the query.' });
       return done();
@@ -155,7 +152,6 @@ looker.plugins.visualizations.add({
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    // Get display value from a cell (prefers rendered)
     function cellVal(row, fieldId) {
       if (!fieldId) return '';
       var cell = row[fieldId.trim()];
@@ -165,7 +161,6 @@ looker.plugins.visualizations.add({
       return '';
     }
 
-    // Get raw number from a cell (for summing)
     function cellNum(row, fieldId) {
       if (!fieldId) return 0;
       var cell = row[fieldId.trim()];
@@ -173,73 +168,71 @@ looker.plugins.visualizations.add({
       return parseFloat(cell.value) || 0;
     }
 
-    // Get Looker's label for a field ID
     function fieldLabel(fieldId) {
       if (!fieldId) return '';
       var f = allFields.find(function(x){ return x.name === fieldId.trim(); });
       return f ? (f.label_short || f.label || fieldId) : fieldId;
     }
 
-    // Split a comma-separated config string into clean array
     function splitList(str) {
       if (!str) return [];
       return str.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
     }
 
-    // Resolve column header: custom label wins, then Looker label
-    function header(customLabel, fieldId) {
+    function resolveLabel(customLabel, fieldId) {
       return (customLabel && customLabel.trim()) ? customLabel.trim() : fieldLabel(fieldId);
     }
 
     // ── Resolve Summary config ────────────────────────────────────────────────
+    var groupField    = (config.summary_group_field   || '').trim();
+    var measureField  = (config.summary_measure_field || '').trim();
+    var groupLabel    = resolveLabel(config.summary_group_label,   groupField);
+    var measureLabel  = resolveLabel(config.summary_measure_label, measureField);
+    var summaryTitle  = (config.summary_title || 'Summary').trim();
 
-    // Group field: configured → first dimension → first field
-    var groupField = (config.summary_group_field || '').trim()
-      || (dimensions.length ? dimensions[0].name : allFields[0].name);
-    var groupLabel = header(config.summary_group_label, groupField);
-
-    // Measure field: configured → first measure available
-    var measureField = (config.summary_measure_field || '').trim()
-      || (measures.length ? measures[0].name : '');
-
-    // If no measure available at all, fall back to row count with a warning label
-    var useRowCount  = !measureField;
-    var measureLabel = header(config.summary_measure_label, measureField)
-      || (useRowCount ? 'Count' : '');
-
-    var summaryTitle = (config.summary_title || 'Summary').trim();
+    // Validate — both must be configured
+    if (!groupField || !measureField) {
+      container.innerHTML =
+        '<div style="padding:20px;color:#c0392b;font-size:13px;line-height:1.8;">'
+        + '<strong>Setup required:</strong><br>'
+        + '1. Click <strong>Edit</strong><br>'
+        + '2. Under <strong>── SUMMARY TABLE ──</strong> fill in:<br>'
+        + '&nbsp;&nbsp;• <em>Group By Field ID</em> (e.g. <code>region_hierarchy.level_3</code>)<br>'
+        + '&nbsp;&nbsp;• <em>Measure Field ID</em> (e.g. <code>tasks.total_tasks</code>)'
+        + '</div>';
+      return done();
+    }
 
     // ════════════════════════════════════════
     //  VIEW 1 — SUMMARY TABLE
+    //  Groups ONLY by summary_group_field
+    //  Sums ONLY summary_measure_field
+    //  All other fields in the query are ignored here
     // ════════════════════════════════════════
     if (this.vizState.view === 'summary') {
 
-      // Aggregate rows by group field
       var map = {};
+      var order = []; // preserve first-seen order
+
       data.forEach(function(row) {
         var key = cellVal(row, groupField) || '(blank)';
-        if (!map[key]) map[key] = { count: 0, total: 0 };
-        map[key].count += 1;
-        if (!useRowCount) map[key].total += cellNum(row, measureField);
+        if (!map[key]) {
+          map[key] = 0;
+          order.push(key);
+        }
+        map[key] += cellNum(row, measureField);
       });
 
-      var entries = Object.entries(map);
-      if (!entries.length) {
-        container.innerHTML = '<div style="padding:20px;color:#666;">Nothing to display. Set <strong>Group By Field ID</strong> in Edit → Summary.</div>';
+      if (!order.length) {
+        container.innerHTML = '<div style="padding:20px;color:#666;">Nothing to display. Check your Group By Field ID.</div>';
         return done();
       }
 
-      // Build table rows
-      var bodyRows = entries.map(function(e) {
-        var name    = e[0];
-        var agg     = e[1];
-        var display = useRowCount
-          ? agg.count.toLocaleString()
-          : agg.total.toLocaleString();
-
+      var bodyRows = order.map(function(name) {
+        var total = map[name];
         return '<tr class="sum-row" data-val="' + name + '" style="cursor:pointer;border-bottom:1px solid #f0f0f0;">'
           + '<td style="padding:11px 8px;color:#1a73e8;font-weight:500;">' + name + '</td>'
-          + '<td style="padding:11px 8px;color:#333;text-align:right;">' + display + '</td>'
+          + '<td style="padding:11px 8px;color:#333;text-align:right;">' + total.toLocaleString() + '</td>'
           + '</tr>';
       }).join('');
 
@@ -259,7 +252,6 @@ looker.plugins.visualizations.add({
         + '</table>'
         + '</div>';
 
-      // Click handlers
       container.querySelectorAll('.sum-row').forEach(function(el) {
         el.onmouseover = function(){ el.style.background = '#f3f8ff'; };
         el.onmouseout  = function(){ el.style.background = ''; };
@@ -276,13 +268,14 @@ looker.plugins.visualizations.add({
 
     // ════════════════════════════════════════
     //  VIEW 2 — DETAIL TABS
+    //  Filters rows where group field = selected value
+    //  Shows only the fields configured per tab
     // ════════════════════════════════════════
-    var activeTab = this.vizState.activeTab;
-
+    var activeTab  = this.vizState.activeTab;
     var tabFields  = splitList(config[activeTab + '_fields']);
     var tabLabels  = splitList(config[activeTab + '_labels']);
 
-    // Filter rows matching the clicked summary value
+    // Filter rows matching the clicked summary group value
     var filtered = data.filter(function(r) {
       return (cellVal(r, groupField) || '(blank)') === viz.vizState.selectedValue;
     });
@@ -299,10 +292,14 @@ looker.plugins.visualizations.add({
         + '</div>';
     }).join('');
 
-    // Tab content table
+    // Tab content
     var contentHtml = '';
     if (!tabFields.length) {
-      contentHtml = '<div style="padding:20px;color:#999;">No fields configured for this tab.<br>Click <strong>Edit</strong> and fill in the Field IDs under <strong>' + (config[activeTab + '_label'] || activeTab) + '</strong>.</div>';
+      contentHtml = '<div style="padding:20px;color:#999;">'
+        + 'No fields configured for this tab.<br>'
+        + 'Click <strong>Edit</strong> and fill in Field IDs under <strong>'
+        + (config[activeTab + '_label'] || activeTab)
+        + '</strong>.</div>';
     } else {
       var headCells = tabFields.map(function(f, i) {
         var lbl = (tabLabels[i] && tabLabels[i].trim()) ? tabLabels[i] : fieldLabel(f);
@@ -313,16 +310,16 @@ looker.plugins.visualizations.add({
 
       var dataCells = '';
       if (!filtered.length) {
-        dataCells = '<tr><td colspan="' + tabFields.length + '" style="padding:20px;color:#999;">'
-          + 'No rows matched "' + viz.vizState.selectedValue + '".'
-          + '</td></tr>';
+        dataCells = '<tr><td colspan="' + tabFields.length
+          + '" style="padding:20px;color:#999;">No rows found for "'
+          + viz.vizState.selectedValue + '".</td></tr>';
       } else {
         dataCells = filtered.map(function(r, i) {
           var cells = tabFields.map(function(f) {
             return '<td style="padding:9px 10px;">' + cellVal(r, f) + '</td>';
           }).join('');
-          return '<tr style="border-bottom:1px solid #f1f3f4;background:' + (i % 2 === 0 ? '#fff' : '#fafafa') + ';">'
-            + cells + '</tr>';
+          return '<tr style="border-bottom:1px solid #f1f3f4;background:'
+            + (i % 2 === 0 ? '#fff' : '#fafafa') + ';">' + cells + '</tr>';
         }).join('');
       }
 
@@ -334,8 +331,6 @@ looker.plugins.visualizations.add({
 
     container.innerHTML =
       '<div style="padding:16px;">'
-
-      // Header row: back button + selected value + row count
       + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">'
       + '<button id="v-back" style="padding:5px 14px;border:1px solid #dadce0;background:#fff;'
       + 'border-radius:4px;cursor:pointer;font-size:12px;color:#1a73e8;font-weight:700;white-space:nowrap;">'
@@ -344,17 +339,12 @@ looker.plugins.visualizations.add({
       + '<span style="font-size:17px;font-weight:700;color:#202124;">' + this.vizState.selectedValue + '</span>'
       + '<span style="font-size:12px;color:#888;">(' + filtered.length + ' rows)</span>'
       + '</div>'
-
-      // Tab bar
       + '<div style="display:flex;border-bottom:1px solid #dadce0;margin-bottom:16px;overflow-x:auto;">'
       + tabBarHtml
       + '</div>'
-
-      // Tab content
       + contentHtml
       + '</div>';
 
-    // Back button
     var backBtn = container.querySelector('#v-back');
     if (backBtn) {
       backBtn.onclick = function() {
@@ -363,7 +353,6 @@ looker.plugins.visualizations.add({
       };
     }
 
-    // Tab switching
     container.querySelectorAll('.v-tab').forEach(function(el) {
       el.onmouseover = function(){ if (el.dataset.tab !== viz.vizState.activeTab) el.style.color = '#202124'; };
       el.onmouseout  = function(){ if (el.dataset.tab !== viz.vizState.activeTab) el.style.color = '#5f6368'; };
@@ -376,3 +365,4 @@ looker.plugins.visualizations.add({
     done();
   }
 });
+
