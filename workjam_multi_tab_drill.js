@@ -1,12 +1,64 @@
 looker.plugins.visualizations.add({
   options: {
-    tab1_label: { type: 'string', label: 'Tab 1: Label', default: 'Level', order: 1 },
-    tab1_fields: { type: 'string', label: 'Tab 1: Fields (IDs)', default: '', placeholder: 'tasks.task_name, tasks.task_status', order: 2 },
-    tab2_label: { type: 'string', label: 'Tab 2: Label', default: 'Location', order: 3 },
-    tab2_fields: { type: 'string', label: 'Tab 2: Fields (IDs)', default: '', placeholder: 'region_hierarchy.location_name', order: 4 },
-    tab3_label: { type: 'string', label: 'Tab 3: Label', default: 'Media', order: 5 },
-    tab3_fields: { type: 'string', label: 'Tab 3: Fields (IDs)', default: '', placeholder: 'tasks.task_id', order: 6 },
-    back_button_label: { type: 'string', label: 'Back Button Text', default: '← BACK TO SUMMARY', order: 7 }
+    // --- SUMMARY OPTIONS ---
+    summary_title: {
+      type: 'string',
+      label: 'Summary: Title',
+      default: 'Summary',
+      order: 1
+    },
+    summary_dimension: {
+      type: 'string',
+      label: 'Summary: Group By Field (ID)',
+      default: '',
+      placeholder: 'e.g. region_hierarchy.level_3',
+      order: 2
+    },
+    summary_metric: {
+      type: 'string',
+      label: 'Summary: Value Field (ID) — leave blank for Row Count',
+      default: '',
+      placeholder: 'e.g. tasks.total_tasks',
+      order: 3
+    },
+    summary_metric_label: {
+      type: 'string',
+      label: 'Summary: Value Column Label',
+      default: 'COUNT',
+      order: 4
+    },
+
+    // --- TAB OPTIONS ---
+    tab1_label: { type: 'string', label: 'Tab 1: Label', default: 'Level', order: 5 },
+    tab1_fields: {
+      type: 'string',
+      label: 'Tab 1: Fields (IDs)',
+      default: '',
+      placeholder: 'tasks.task_name, tasks.task_status',
+      order: 6
+    },
+    tab2_label: { type: 'string', label: 'Tab 2: Label', default: 'Location', order: 7 },
+    tab2_fields: {
+      type: 'string',
+      label: 'Tab 2: Fields (IDs)',
+      default: '',
+      placeholder: 'region_hierarchy.location_name',
+      order: 8
+    },
+    tab3_label: { type: 'string', label: 'Tab 3: Label', default: 'Media', order: 9 },
+    tab3_fields: {
+      type: 'string',
+      label: 'Tab 3: Fields (IDs)',
+      default: '',
+      placeholder: 'tasks.task_id',
+      order: 10
+    },
+    back_button_label: {
+      type: 'string',
+      label: 'Back Button Text',
+      default: '← BACK TO SUMMARY',
+      order: 11
+    }
   },
 
   create: function(element, config) {
@@ -18,10 +70,8 @@ looker.plugins.visualizations.add({
     const container = element.querySelector('#v-container');
     const viz = this;
 
-    // Clear previous errors
     this.clearErrors();
 
-    // 1. Check if data exists
     if (!data || data.length === 0) {
       container.innerHTML = `<div style="padding:20px; color:#666;">No data found. Please run a query.</div>`;
       return done();
@@ -29,59 +79,93 @@ looker.plugins.visualizations.add({
 
     const fields = queryResponse.fields.dimension_like.concat(queryResponse.fields.measure_like);
     if (fields.length === 0) {
-      this.addError({ title: "No Fields", message: "Please select at least one dimension and one measure." });
+      this.addError({ title: "No Fields", message: "Please select at least one dimension." });
       return done();
     }
 
-    const getVal = (row, fieldName) => {
+    // Helper: get display value from a row cell
+    const getVal = function(row, fieldName) {
       if (!fieldName) return "";
       var f = fieldName.trim();
       if (!row[f]) return "";
       var cell = row[f];
-      // Prefer rendered value for display, fall back to value
-      return (cell.rendered !== undefined && cell.rendered !== null) ? cell.rendered : (cell.value !== undefined && cell.value !== null ? cell.value : "");
+      return (cell.rendered !== undefined && cell.rendered !== null)
+        ? cell.rendered
+        : (cell.value !== undefined && cell.value !== null ? cell.value : "");
     };
 
-    const getLabel = (fieldName) => {
+    // Helper: get raw numeric value for summing
+    const getRawVal = function(row, fieldName) {
+      if (!fieldName) return 0;
+      var f = fieldName.trim();
+      if (!row[f]) return 0;
+      var cell = row[f];
+      return parseFloat(cell.value) || 0;
+    };
+
+    const getLabel = function(fieldName) {
       var match = fields.find(function(f) { return f.name === fieldName.trim(); });
       return match ? (match.label_short || match.label || fieldName) : fieldName;
     };
 
+    // Resolve which field to group by in summary (fallback to first field)
+    const summaryDimField = (config.summary_dimension || "").trim() !== ""
+      ? config.summary_dimension.trim()
+      : fields[0].name;
+
+    const summaryDimLabel = getLabel(summaryDimField);
+
+    // Resolve metric field (optional — blank = row count)
+    const summaryMetricField = (config.summary_metric || "").trim();
+    const summaryMetricLabel = (config.summary_metric_label || "COUNT").trim();
+    const summaryTitle = (config.summary_title || "Summary").trim();
+
     // --- VIEW 1: SUMMARY ---
     if (this.vizState.view === 'summary') {
-      const mainDim = fields[0].name;
       const summaryMap = {};
 
       data.forEach(function(row) {
-        var val = getVal(row, mainDim);
+        var val = getVal(row, summaryDimField);
         if (val === "" || val === null || val === undefined) val = "(blank)";
-        summaryMap[val] = (summaryMap[val] || 0) + 1;
+
+        if (!summaryMap[val]) {
+          summaryMap[val] = { count: 0, metric: 0 };
+        }
+        summaryMap[val].count += 1;
+
+        if (summaryMetricField !== "") {
+          summaryMap[val].metric += getRawVal(row, summaryMetricField);
+        }
       });
 
       var entries = Object.entries(summaryMap);
 
       if (entries.length === 0) {
-        container.innerHTML = `<div style="padding:20px; color:#666;">No data to display. Check your field configuration in Edit.</div>`;
+        container.innerHTML = `<div style="padding:20px; color:#666;">No data to display. Check your <strong>Summary: Group By Field</strong> in Edit.</div>`;
         return done();
       }
 
       var html = `<div style="padding:15px;">
-        <h3 style="margin:0 0 15px 0; color:#333; font-size:15px;">Summary by ${fields[0].label_short || fields[0].label}</h3>
+        <h3 style="margin:0 0 15px 0; color:#333; font-size:15px;">${summaryTitle} by ${summaryDimLabel}</h3>
         <table style="width:100%; border-collapse:collapse; text-align:left;">
           <thead style="color:#666; font-size:12px; border-bottom:2px solid #eee;">
             <tr>
-              <th style="padding-bottom:10px;">${(fields[0].label_short || fields[0].label).toUpperCase()}</th>
-              <th style="padding-bottom:10px;">ROW COUNT</th>
+              <th style="padding-bottom:10px;">${summaryDimLabel.toUpperCase()}</th>
+              <th style="padding-bottom:10px;">${summaryMetricLabel.toUpperCase()}</th>
             </tr>
           </thead>
           <tbody>`;
 
       entries.forEach(function(entry) {
         var name = entry[0];
-        var count = entry[1];
+        var agg = entry[1];
+        var displayVal = summaryMetricField !== ""
+          ? agg.metric.toLocaleString()
+          : agg.count.toLocaleString();
+
         html += `<tr class="row-link" data-val="${name}" style="cursor:pointer; border-bottom:1px solid #f5f5f5;">
           <td style="padding:12px 5px; color:#1a73e8; font-weight:500;">${name}</td>
-          <td style="color:#333;">${count}</td>
+          <td style="color:#333;">${displayVal}</td>
         </tr>`;
       });
 
@@ -106,7 +190,7 @@ looker.plugins.visualizations.add({
       var activeTabFields = activeTabFieldsRaw.split(',').map(function(f) { return f.trim(); }).filter(function(f) { return f !== ""; });
 
       var filteredData = data.filter(function(r) {
-        var val = getVal(r, fields[0].name);
+        var val = getVal(r, summaryDimField);
         if (val === "" || val === null || val === undefined) val = "(blank)";
         return val === viz.vizState.selectedValue;
       });
@@ -125,7 +209,7 @@ looker.plugins.visualizations.add({
         </div>`;
 
       if (activeTabFields.length === 0) {
-        html += `<div style="padding:20px; color:#999; font-size:13px;">No fields configured for this tab. Click <strong>Edit</strong> and add field IDs under "${config[activeTabId + '_label'] || activeTabId} Fields".</div>`;
+        html += `<div style="padding:20px; color:#999; font-size:13px;">No fields configured for this tab. Click <strong>Edit</strong> and add field IDs under "<strong>${config[activeTabId + '_label'] || activeTabId} Fields</strong>".</div>`;
       } else {
         html += `<table style="width:100%; border-collapse:collapse; text-align:left;">
           <thead style="background:#f8f9fa; color:#5f6368; font-size:11px;"><tr>`;
@@ -152,7 +236,7 @@ looker.plugins.visualizations.add({
       html += `</div>`;
       container.innerHTML = html;
 
-      // FIX: use container.querySelector instead of document.getElementById
+      // Use container.querySelector (not document.getElementById)
       var backBtn = container.querySelector('#v-back');
       if (backBtn) {
         backBtn.onclick = function() {
@@ -162,8 +246,12 @@ looker.plugins.visualizations.add({
       }
 
       container.querySelectorAll('.v-tab').forEach(function(el) {
-        el.addEventListener('mouseover', function() { if (el.getAttribute('data-tab') !== viz.vizState.activeTab) el.style.color = '#202124'; });
-        el.addEventListener('mouseout', function() { if (el.getAttribute('data-tab') !== viz.vizState.activeTab) el.style.color = '#5f6368'; });
+        el.addEventListener('mouseover', function() {
+          if (el.getAttribute('data-tab') !== viz.vizState.activeTab) el.style.color = '#202124';
+        });
+        el.addEventListener('mouseout', function() {
+          if (el.getAttribute('data-tab') !== viz.vizState.activeTab) el.style.color = '#5f6368';
+        });
         el.onclick = function() {
           viz.vizState.activeTab = el.getAttribute('data-tab');
           viz.updateAsync(data, element, config, queryResponse, details, done);
@@ -174,3 +262,4 @@ looker.plugins.visualizations.add({
     done();
   }
 });
+
